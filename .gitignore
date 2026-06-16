@@ -1,0 +1,20 @@
+# environment
+.venv/
+.env
+
+# data — never commit raw inputs, staged GDrive files, generated outputs, or the catalog
+scripts/inputs/
+scripts/outputs/
+catalog/
+logs/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# credentials
+*.json
+*.p12

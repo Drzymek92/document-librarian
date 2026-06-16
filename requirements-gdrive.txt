@@ -1,0 +1,4 @@
+# Optional: Google Drive ingestion source.
+# Requires R (https://www.r-project.org/) installed on the machine, plus the R
+# packages: googledrive, googlesheets4, readr, dplyr, gargle. rpy2 bridges to it.
+rpy2==3.6.5
