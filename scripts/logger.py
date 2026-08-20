@@ -7,8 +7,13 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger  # already configured — avoid duplicate handlers on repeated calls
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    # Anchored to the project root via __file__, NOT the CWD: a relative Path("logs")
+    # resolves against wherever the process was launched from, so any run whose CWD is
+    # not the project root (scheduler, service, Startup shortcut, systemd unit) writes
+    # to a different - often unwritable - directory. Crash-looped the machine_bridge
+    # watch daemon silently for 5 days (2026-07-19).
+    log_dir = Path(__file__).resolve().parents[1] / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{name}_{datetime.now():%Y%m%d}.log"
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
     stream_handler = logging.StreamHandler()
