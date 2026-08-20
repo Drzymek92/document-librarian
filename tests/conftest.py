@@ -7,7 +7,39 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import hashlib
+import math
+import re
+
 import pytest
+
+# --- Deterministic stand-in for a real embedding model ----------------------
+# Hashing bag-of-words: each token lands in a fixed bucket, so two texts sharing
+# vocabulary get a high cosine and two that share none get ~0. Enough to exercise
+# ranking, fusion and the model lock without a network call or an API key, and
+# deterministic so a failure is a real regression rather than model drift.
+TOY_DIM = 64
+
+
+def toy_embed(text: str) -> list[float]:
+    vec = [0.0] * TOY_DIM
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        bucket = int(hashlib.sha1(token.encode("utf-8")).hexdigest()[:8], 16) % TOY_DIM
+        vec[bucket] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec))
+    return [v / norm for v in vec] if norm else vec
+
+
+@pytest.fixture
+def toy_embedder(monkeypatch):
+    """Point the embedding layer at toy_embed for the duration of a test."""
+    from scripts import embed
+
+    monkeypatch.setattr(
+        embed, "embed_texts", lambda texts, model: [toy_embed(t) for t in texts]
+    )
+    monkeypatch.setattr(embed, "embed_query", lambda text, model: toy_embed(text))
+    return toy_embed
 
 
 @pytest.fixture(scope="session")

@@ -7,7 +7,7 @@ class EffortProfile:
     name: str
     vision_model: str          # model used to transcribe/describe images
     text_model: str            # model used for enrichment (summary, tags)
-    embedding_model: str       # reserved for future semantic search
+    embedding_model: str       # model used for dense retrieval vectors
     enrich_summary: bool       # call the LLM to summarize each document
     enrich_tags_llm: bool      # call the LLM to generate tags (vs. cheap keyword tags)
     summary_max_words: int
