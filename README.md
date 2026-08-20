@@ -11,7 +11,8 @@
 Document Librarian turns a heterogeneous folder of files (local or Google Drive) into a single
 **DuckDB** catalog with full-text search. Each file is extracted into text chunks tagged with a
 precise locator (page, sheet, row range, heading), enriched with metadata, and indexed for
-**BM25** ranked retrieval. Instead of re-reading raw files, any downstream tool or person can ask
+**hybrid retrieval** — BM25 keyword search and dense-vector semantic search, fused with Reciprocal
+Rank Fusion. Instead of re-reading raw files, any downstream tool or person can ask
 *"what do I know about X?"* and get back the most relevant passages with their source and location.
 
 It is built around a **cost-tiered effort model**: the economical tier spends zero LLM tokens
@@ -29,13 +30,16 @@ LLM-generated summaries and topical tags — so you trade cost for richness expl
   - **HTML** — scripts/styles stripped, `<title>` captured.
   - **Markdown** — split by headings, with each heading used as the chunk locator.
   - **Images** — transcribed and described by a vision model.
-- **DuckDB full-text search (BM25)** with filters by file type, tag, and source.
+- **Hybrid retrieval with a mode selector** — `bm25` (lexical), `vector` (dense embeddings,
+  exact cosine), `hybrid` (both, fused by Reciprocal Rank Fusion at k=60), or `auto`, which
+  picks hybrid when the catalog has embeddings and BM25 when it does not. Filters by file type,
+  tag, and source apply to every mode.
 - **Idempotent ingestion** — documents are keyed by a hash of identity + modified time, so
   re-scanning a large folder skips unchanged files.
 - **Local *and* Google Drive sources** — native Google files are exported (Doc→docx, Sheet→xlsx,
   Slides→pdf) before extraction. *(Optional; see Google Drive support below.)*
 - **Two effort tiers** trading token cost for enrichment depth.
-- **41 tests** covering every extractor and the ingest/query pipeline.
+- **59 tests** covering every extractor, the ingest pipeline, and each retrieval mode.
 
 ## Demo
 
@@ -63,8 +67,14 @@ flowchart TD
     O --> P
     P --> Q[Rebuild full-text index]
     Q --> R([Catalog ready])
-    R --> S[Query: BM25 search with type/tag/source filters]
-    S --> T([Ranked results: file, locator, snippet])
+    R --> S{Retrieval mode}
+    S -- bm25 --> U[BM25 keyword ranking]
+    S -- vector --> V[Cosine over chunk embeddings]
+    S -- hybrid --> U
+    S -- hybrid --> V
+    U --> W[Reciprocal Rank Fusion k=60]
+    V --> W
+    W --> T([Ranked results: file, locator, snippet])
 ```
 
 ### Sample run
@@ -95,22 +105,44 @@ The pipeline is four modular stages, each independently testable:
    `doc_id = hash(path + modified_time)` makes re-ingestion idempotent.
 3. **Enrich** (`enrich.py`, `config.py`) — per effort tier, attach cheap keyword tags or
    LLM-generated summaries + tags.
-4. **Index & Query** (`db.py`, `query.py`) — rebuild the BM25 full-text index, then serve ranked
-   results filtered by type/tag/source.
+4. **Index & Query** (`db.py`, `query.py`, `embed.py`, `vector_store.py`) — rebuild the BM25
+   full-text index, optionally embed chunks into vectors, then serve ranked results filtered by
+   type/tag/source through the selected retrieval mode.
 
-The catalog schema separates `documents`, `chunks`, `doc_metadata`, and `tags`, with a nullable
-`embedding` column reserved for future hybrid semantic search.
+The catalog schema separates `documents`, `chunks`, `chunk_embeddings`, `catalog_meta`,
+`doc_metadata`, and `tags`.
+
+**Why fuse on rank rather than on score.** A BM25 score and a cosine similarity live on different,
+unbounded, query-dependent scales, so blending them into one number needs a fudge factor that has
+to be re-tuned per corpus. RRF scores each chunk `1/(k + rank)` in every list it appears in and
+sums, so a chunk both retrievers ranked well beats one that only a single retriever loved. `k=60`
+is the value from the original RRF paper.
+
+**Why vectors live in their own table.** An in-place `UPDATE chunks SET embedding = ?` on a
+variable-length `FLOAT[]` column crashes DuckDB natively on catalogs whose row groups were written
+by an older build. Inserting into a separate `chunk_embeddings` table never rewrites those row
+groups, so it sidesteps the crash. Catalogs created before this change are migrated automatically
+on open.
+
+**Why the vector store sits behind an interface.** `vector_store.py` defines a `VectorStore` ABC
+with a DuckDB implementation — exact brute-force cosine, no service to run, exact by construction
+and therefore the honest baseline for an approximate store to be measured against. Swapping in a
+managed store means implementing five methods; nothing above the interface changes.
 
 ## Tech Stack
 
 - **Language:** Python 3.12
-- **Catalog & search:** DuckDB 1.5 (single-file database + native FTS / BM25)
+- **Catalog & search:** DuckDB 1.5 (single-file database, native FTS / BM25, and exact cosine
+  over stored embeddings)
 - **Extraction:** PyMuPDF (PDF), python-docx (Word), openpyxl (Excel), pandas (CSV/TSV),
   BeautifulSoup4 (HTML), Pillow (images)
 - **LLM integration:** langchain-openai against any **OpenAI-compatible** gateway (vision OCR +
   enrichment), configured via environment variables
 - **Optional Google Drive source:** R's `googledrive`/`googlesheets4` bridged through `rpy2`
-- **Testing:** pytest (41 tests), reportlab for synthetic PDF fixtures
+- **Retrieval:** BM25 + dense embeddings fused with Reciprocal Rank Fusion (k=60), behind a
+  swappable `VectorStore` interface
+- **Testing:** pytest (59 tests), reportlab for synthetic PDF fixtures; retrieval tests run
+  offline against a deterministic stand-in embedder, so no API key is needed to run the suite
 
 ## Getting Started
 
@@ -129,9 +161,9 @@ pip install -r requirements.txt
 cp config/.env.example config/.env   # then fill in your LLM gateway values
 ```
 
-LLM-backed features (image OCR, the `high` effort tier) need an OpenAI-compatible endpoint — set
-`LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` in `config/.env`. The default `low` tier works
-without any LLM for all text-based formats.
+LLM-backed features (image OCR, the `high` effort tier, and embeddings) need an OpenAI-compatible
+endpoint — set `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` in `config/.env`. The default `low`
+tier works without any LLM for all text-based formats, and BM25 search needs no LLM at all.
 
 ### Usage
 
@@ -139,15 +171,29 @@ without any LLM for all text-based formats.
 # Ingest a local folder (economical tier)
 python -m scripts.ingest local ./docs --effort low
 
-# Query the catalog
+# Query the catalog — `auto` uses hybrid if the catalog has vectors, else BM25
 python -m scripts.query "client feedback" --type pdf --tag transcription --limit 5
 
-# Run the test suite
+# Embed the catalog's chunks to unlock vector and hybrid search
+python -m scripts.embed_backfill --db catalog/librarian.duckdb
+
+# Pick a retrieval mode explicitly
+python -m scripts.query "why did the export fail" --mode hybrid
+python -m scripts.query "ERR_LOCALE_MISMATCH" --mode bm25
+
+# Run the test suite (no API key required)
 pytest tests/
 ```
 
 Ingest flags: `--effort {low,high}`, `--no-enrich`, `--db <path>`.
-Query flags: `--type` (repeatable), `--tag` (repeatable), `--source {local,gdrive}`, `--limit`.
+Query flags: `--mode {auto,bm25,vector,hybrid}`, `--type` (repeatable), `--tag` (repeatable),
+`--source {local,gdrive}`, `--limit`.
+Backfill flags: `--db <path>`, `--model <name>`, `--doc-id <id>`.
+
+Embedding is a separate, resumable pass rather than part of ingest: cost stays opt-in, and a run
+that dies halfway keeps the vectors it already wrote. The first backfill **locks the catalog to one
+embedding model** — a 1536-d vector and a 3072-d vector cannot be compared, so a later `--model`
+is ignored (with a warning) until the catalog is re-embedded.
 
 ### Google Drive support (optional)
 
@@ -167,7 +213,10 @@ The first run opens a browser for one-time authentication; the token is cached a
 document-librarian/
 ├── scripts/
 │   ├── ingest.py          # CLI entry: walk source → extract → enrich → load
-│   ├── query.py           # CLI entry: BM25 search with filters
+│   ├── query.py           # CLI entry: hybrid/bm25/vector/auto search with filters
+│   ├── embed.py           # dense embeddings via any OpenAI-compatible endpoint
+│   ├── embed_backfill.py  # CLI entry: embed chunks that have no vector yet
+│   ├── vector_store.py    # VectorStore interface + DuckDB cosine implementation
 │   ├── extractors.py      # per-file-type extraction into located chunks
 │   ├── db.py / schema.sql # DuckDB catalog + FTS index
 │   ├── enrich.py          # summaries/tags per effort tier
