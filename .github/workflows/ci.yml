@@ -18,3 +18,13 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run tests
         run: pytest tests/
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t document-librarian:ci .
+      - name: Image runs the CLI
+        run: docker run --rm document-librarian:ci python -m scripts.query --help
