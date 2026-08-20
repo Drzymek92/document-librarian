@@ -1,0 +1,29 @@
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Python build noise
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Tests are run by CI against the source tree, not shipped inside the image
+tests/
+
+# Data and state must never be baked into an image
+logs/
+catalog/
+*.duckdb
+scripts/inputs/
+scripts/outputs/
+
+# Credentials (belt and braces — .env is gitignored already)
+.env
+*.p12
+*.pem
+*.key

@@ -195,6 +195,21 @@ that dies halfway keeps the vectors it already wrote. The first backfill **locks
 embedding model** — a 1536-d vector and a 3072-d vector cannot be compared, so a later `--model`
 is ignored (with a warning) until the catalog is re-embedded.
 
+### Run in Docker
+
+```bash
+docker build -t document-librarian .
+
+# The catalog is state, not code — mount it rather than baking it into the image
+docker run --rm -v "$PWD/catalog:/data" document-librarian   python -m scripts.query "client feedback" --db /data/librarian.duckdb
+
+# Embedding needs the LLM gateway, passed at run time (never baked into the image)
+docker run --rm -v "$PWD/catalog:/data"   -e LLM_API_KEY -e LLM_BASE_URL -e LLM_MODEL   document-librarian python -m scripts.embed_backfill --db /data/librarian.duckdb
+```
+
+The image carries no credentials and no catalog data, and runs as a non-root user. CI builds it on
+every push and runs the CLI inside it, so the build is verified rather than assumed.
+
 ### Google Drive support (optional)
 
 Google Drive ingestion is an optional extra that requires [R](https://www.r-project.org/) plus the
