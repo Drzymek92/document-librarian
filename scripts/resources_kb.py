@@ -12,10 +12,11 @@ logger = get_logger("resources_kb")
 # resources/files/, the catalog under resources/catalog/resources.duckdb, and a
 # descriptive INDEX.md is regenerated on every ingest for cheap agent browsing.
 #
-# Layout is resolved relative to the Claude_Projects root (scripts -> librarian
-# -> projects -> Claude_Projects), overridable via LIBRARIAN_RESOURCES_DIR.
+# Defaults to `resources/` beside the repo root, anchored via __file__ rather than
+# the CWD so a run launched from anywhere resolves to the same place. Point
+# LIBRARIAN_RESOURCES_DIR elsewhere to keep the knowledge base outside the repo.
 
-_DEFAULT_ROOT = Path(__file__).resolve().parents[3] / "resources"
+_DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "resources"
 
 
 def resources_dir() -> Path:
